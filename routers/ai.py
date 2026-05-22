@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import Optional
 from app.core.database import get_db
-from app.core.redis import make_cache_key, get_cached, set_cached
+from app.core.redis import make_cache_key, get_cached, set_cached, check_rate_limit
 from app.core.security import get_api_key
 from app.models.community import InferenceLog
 from app.models.recipe import Recipe
@@ -47,6 +47,7 @@ async def recognize(
     db: AsyncSession = Depends(get_db),
     _=Depends(get_api_key),
 ):
+    await check_rate_limit("/ai/recognize", _.id)
     if image.content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(status_code=415, detail="Only JPEG and PNG images are supported")
 
@@ -95,6 +96,7 @@ async def generate(
     db: AsyncSession = Depends(get_db),
     _=Depends(get_api_key),
 ):
+    await check_rate_limit("/ai/generate", _.id)
     if len(ingredients) > 20:
         raise HTTPException(status_code=422, detail="Maximum 20 ingredients allowed")
     if len(ingredients) == 0:
@@ -142,6 +144,7 @@ async def nutrition(
     db: AsyncSession = Depends(get_db),
     _=Depends(get_api_key),
 ):
+    await check_rate_limit("/ai/nutrition", _.id)
     if len(ingredients) > 20:
         raise HTTPException(status_code=422, detail="Maximum 20 ingredients allowed")
 
@@ -171,6 +174,7 @@ async def substitute(
     db: AsyncSession = Depends(get_db),
     _=Depends(get_api_key),
 ):
+    await check_rate_limit("/ai/substitute", _.id)
     cache_key = make_cache_key("substitute", {"ingredient": ingredient, "restriction": restriction})
     cached = await get_cached(cache_key)
     if cached:
@@ -197,6 +201,7 @@ async def assist(
     db: AsyncSession = Depends(get_db),
     _=Depends(get_api_key),
 ):
+    await check_rate_limit("/ai/assist", _.id)
     import json as _json
 
     # Parse ingredients from form field (JSON string)
