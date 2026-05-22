@@ -8,6 +8,20 @@ class Ingredient(BaseModel):
     quantity: str
     unit: str = ""
 
+    @field_validator("name", "quantity", "unit")
+    @classmethod
+    def strip_whitespace(cls, v):
+        return v.strip()
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v):
+        if len(v.strip()) == 0:
+            raise ValueError("Ingredient name cannot be empty")
+        if len(v) > 100:
+            raise ValueError("Ingredient name cannot exceed 100 characters")
+        return v.strip()
+
 
 class RecipeCreate(BaseModel):
     title: str
@@ -19,18 +33,56 @@ class RecipeCreate(BaseModel):
     cook_time_minutes: int = 0
     servings: int = 1
 
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, v):
+        v = v.strip()
+        if len(v) == 0:
+            raise ValueError("Title cannot be empty")
+        if len(v) > 200:
+            raise ValueError("Title cannot exceed 200 characters")
+        return v
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, v):
+        if len(v) > 2000:
+            raise ValueError("Description cannot exceed 2000 characters")
+        return v.strip()
+
     @field_validator("steps")
     @classmethod
     def validate_steps(cls, v):
         if len(v) > 30:
             raise ValueError("Recipe cannot have more than 30 steps")
-        return v
+        cleaned = [s.strip() for s in v if s.strip()]
+        if len(cleaned) == 0 and len(v) > 0:
+            raise ValueError("Steps cannot be empty strings")
+        return cleaned
 
     @field_validator("ingredients")
     @classmethod
     def validate_ingredients(cls, v):
         if len(v) > 20:
             raise ValueError("Recipe cannot have more than 20 ingredients")
+        return v
+
+    @field_validator("prep_time_minutes", "cook_time_minutes")
+    @classmethod
+    def validate_time(cls, v):
+        if v < 0:
+            raise ValueError("Time cannot be negative")
+        if v > 10080:  # 1 week in minutes
+            raise ValueError("Time value is unrealistically large")
+        return v
+
+    @field_validator("servings")
+    @classmethod
+    def validate_servings(cls, v):
+        if v < 1:
+            raise ValueError("Servings must be at least 1")
+        if v > 1000:
+            raise ValueError("Servings value is unrealistically large")
         return v
 
 
@@ -43,6 +95,31 @@ class RecipeUpdate(BaseModel):
     prep_time_minutes: Optional[int] = None
     cook_time_minutes: Optional[int] = None
     servings: Optional[int] = None
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, v):
+        if v is not None:
+            v = v.strip()
+            if len(v) == 0:
+                raise ValueError("Title cannot be empty")
+            if len(v) > 200:
+                raise ValueError("Title cannot exceed 200 characters")
+        return v
+
+    @field_validator("steps")
+    @classmethod
+    def validate_steps(cls, v):
+        if v is not None and len(v) > 30:
+            raise ValueError("Recipe cannot have more than 30 steps")
+        return v
+
+    @field_validator("ingredients")
+    @classmethod
+    def validate_ingredients(cls, v):
+        if v is not None and len(v) > 20:
+            raise ValueError("Recipe cannot have more than 20 ingredients")
+        return v
 
 
 class RecipeOut(BaseModel):
