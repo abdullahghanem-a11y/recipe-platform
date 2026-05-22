@@ -6,6 +6,7 @@ from sqlalchemy import select
 from typing import Optional
 from app.core.database import get_db
 from app.core.redis import make_cache_key, get_cached, set_cached
+from app.core.security import get_api_key
 from app.models.community import InferenceLog
 from app.models.recipe import Recipe
 from app.services import ai as ai_service
@@ -37,30 +38,30 @@ async def _log_inference(
 def _image_hash(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
+
+# ── POST /ai/recognize ────────────────────────────────────────────────
+
 @router.post("/recognize")
 async def recognize(
     image: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
+    _=Depends(get_api_key),
 ):
     if image.content_type not in ALLOWED_IMAGE_TYPES:
-        raise HTTPException(
-            status_code=415,
-            detail="Only JPEG and PNG images are supported",
-        )
+        raise HTTPException(status_code=415, detail="Only JPEG and PNG images are supported")
 
     image_bytes = await image.read()
     if len(image_bytes) > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Image must be under 10MB")
 
+    # Food gate check
     if not ai_service.image_is_food(image_bytes):
         raise HTTPException(
             status_code=422,
-            detail={
-                "error": "not_food",
-                "message": "Image does not appear to contain food.",
-            },
+            detail={"error": "not_food", "message": "Image does not appear to contain food."},
         )
 
+    # Cache check
     cache_key = make_cache_key("recognize", {"hash": _image_hash(image_bytes)})
     cached = await get_cached(cache_key)
     if cached:
@@ -70,10 +71,10 @@ async def recognize(
     recognition = ai_service.recognize_dish(image_bytes)
     processing_ms = int((time.perf_counter() - t0) * 1000)
 
+    # Find matching recipes in DB
+    dish_name = recognition["identified_dish"]
     result = await db.execute(
-        select(Recipe)
-        .where(Recipe.title.ilike(f"%{recognition['identified_dish'].split()[0]}%"))
-        .limit(5)
+        select(Recipe).where(Recipe.title.ilike(f"%{dish_name.split()[0]}%")).limit(5)
     )
     matching = result.scalars().all()
     recognition["matching_recipes"] = [
@@ -81,29 +82,25 @@ async def recognize(
     ]
 
     await set_cached(cache_key, recognition)
-    await _log_inference(
-        db, "/ai/recognize", _image_hash(image_bytes), recognition, processing_ms
-    )
+    await _log_inference(db, "/ai/recognize", _image_hash(image_bytes), recognition, processing_ms)
     return recognition
+
+
+# ── POST /ai/generate ─────────────────────────────────────────────────
 
 @router.post("/generate")
 async def generate(
     ingredients: list[str],
     dietary_preferences: list[str] = None,
     db: AsyncSession = Depends(get_db),
+    _=Depends(get_api_key),
 ):
     if len(ingredients) > 20:
-        raise HTTPException(
-            status_code=422, detail="Maximum 20 ingredients allowed"
-        )
+        raise HTTPException(status_code=422, detail="Maximum 20 ingredients allowed")
     if len(ingredients) == 0:
-        raise HTTPException(
-            status_code=422, detail="At least one ingredient required"
-        )
+        raise HTTPException(status_code=422, detail="At least one ingredient required")
 
-    cache_key = make_cache_key(
-        "generate", {"ingredients": sorted(ingredients)}
-    )
+    cache_key = make_cache_key("generate", {"ingredients": sorted(ingredients)})
     cached = await get_cached(cache_key)
     if cached:
         return cached
@@ -111,7 +108,7 @@ async def generate(
     t0 = time.perf_counter()
     try:
         recipe = await ai_service.generate_recipe(ingredients, dietary_preferences)
-    except RuntimeError:
+    except RuntimeError as e:
         raise HTTPException(
             status_code=503,
             detail={
@@ -125,7 +122,7 @@ async def generate(
             status_code=503,
             detail={
                 "error": "generation_failed",
-                "message": "Could not parse a valid recipe. Please try again.",
+                "message": "Could not parse a valid recipe from the model. Please try again.",
                 "retry_after_seconds": 10,
             },
         )
@@ -135,21 +132,20 @@ async def generate(
     await _log_inference(db, "/ai/generate", cache_key, recipe, processing_ms)
     return recipe
 
+
+# ── POST /ai/nutrition ────────────────────────────────────────────────
+
 @router.post("/nutrition")
 async def nutrition(
     ingredients: list[str],
     servings: int = 1,
     db: AsyncSession = Depends(get_db),
+    _=Depends(get_api_key),
 ):
     if len(ingredients) > 20:
-        raise HTTPException(
-            status_code=422, detail="Maximum 20 ingredients allowed"
-        )
+        raise HTTPException(status_code=422, detail="Maximum 20 ingredients allowed")
 
-    cache_key = make_cache_key(
-        "nutrition",
-        {"ingredients": sorted(ingredients), "servings": servings},
-    )
+    cache_key = make_cache_key("nutrition", {"ingredients": sorted(ingredients), "servings": servings})
     cached = await get_cached(cache_key)
     if cached:
         return cached
@@ -158,26 +154,24 @@ async def nutrition(
     try:
         result = await ai_service.analyze_nutrition(ingredients, servings)
     except Exception:
-        raise HTTPException(
-            status_code=503,
-            detail="Nutrition analysis temporarily unavailable",
-        )
+        raise HTTPException(status_code=503, detail="Nutrition analysis temporarily unavailable")
 
     processing_ms = int((time.perf_counter() - t0) * 1000)
     await set_cached(cache_key, result)
     await _log_inference(db, "/ai/nutrition", cache_key, result, processing_ms)
     return result
 
+
+# ── POST /ai/substitute ───────────────────────────────────────────────
+
 @router.post("/substitute")
 async def substitute(
     ingredient: str,
     restriction: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
+    _=Depends(get_api_key),
 ):
-    cache_key = make_cache_key(
-        "substitute",
-        {"ingredient": ingredient, "restriction": restriction},
-    )
+    cache_key = make_cache_key("substitute", {"ingredient": ingredient, "restriction": restriction})
     cached = await get_cached(cache_key)
     if cached:
         return cached
@@ -186,10 +180,7 @@ async def substitute(
     try:
         result = await ai_service.get_substitutions(ingredient, restriction)
     except Exception:
-        raise HTTPException(
-            status_code=503,
-            detail="Substitution service temporarily unavailable",
-        )
+        raise HTTPException(status_code=503, detail="Substitution service temporarily unavailable")
 
     processing_ms = int((time.perf_counter() - t0) * 1000)
     await set_cached(cache_key, result)
@@ -197,28 +188,28 @@ async def substitute(
     return result
 
 
+# ── POST /ai/assist ───────────────────────────────────────────────────
+
 @router.post("/assist")
 async def assist(
     image: Optional[UploadFile] = File(default=None),
     ingredients: Optional[str] = Form(default=None),
     db: AsyncSession = Depends(get_db),
+    _=Depends(get_api_key),
 ):
     import json as _json
 
+    # Parse ingredients from form field (JSON string)
     ingredient_list = []
     if ingredients:
         try:
             ingredient_list = _json.loads(ingredients)
         except Exception:
-            raise HTTPException(
-                status_code=422,
-                detail="ingredients must be a valid JSON array string",
-            )
+            raise HTTPException(status_code=422, detail="ingredients must be a JSON array string")
         if len(ingredient_list) > 20:
-            raise HTTPException(
-                status_code=422, detail="Maximum 20 ingredients allowed"
-            )
+            raise HTTPException(status_code=422, detail="Maximum 20 ingredients allowed")
 
+    # At least one input required
     if not image and not ingredient_list:
         raise HTTPException(
             status_code=422,
@@ -228,20 +219,15 @@ async def assist(
     image_bytes = None
     if image:
         if image.content_type not in ALLOWED_IMAGE_TYPES:
-            raise HTTPException(
-                status_code=415,
-                detail="Only JPEG and PNG images are supported",
-            )
+            raise HTTPException(status_code=415, detail="Only JPEG and PNG images are supported")
         image_bytes = await image.read()
         if not ai_service.image_is_food(image_bytes):
             raise HTTPException(
                 status_code=422,
-                detail={
-                    "error": "not_food",
-                    "message": "Image does not appear to contain food.",
-                },
+                detail={"error": "not_food", "message": "Image does not appear to contain food."},
             )
 
+    # Determine input type
     if image_bytes and ingredient_list:
         input_type = "photo_and_ingredients"
     elif image_bytes:
@@ -253,91 +239,58 @@ async def assist(
     processing_times = {}
     total_start = time.perf_counter()
 
-    # Task 1 — dish recognition (image only)
+    # ── Task: dish recognition (only if image provided) ──
     if image_bytes:
         t0 = time.perf_counter()
         try:
             recognition = ai_service.recognize_dish(image_bytes)
-            db_result = await db.execute(
-                select(Recipe)
-                .where(
-                    Recipe.title.ilike(
-                        f"%{recognition['identified_dish'].split()[0]}%"
-                    )
-                )
-                .limit(5)
+            result = await db.execute(
+                select(Recipe).where(
+                    Recipe.title.ilike(f"%{recognition['identified_dish'].split()[0]}%")
+                ).limit(5)
             )
-            matching = db_result.scalars().all()
+            matching = result.scalars().all()
             recognition["matching_recipes"] = [
                 {"recipe_id": r.id, "title": r.title} for r in matching
             ]
             response["dish_recognition"] = recognition
         except Exception as e:
-            response["dish_recognition"] = {
-                "error": "recognition_failed",
-                "message": str(e),
-            }
-        processing_times["recognition"] = int(
-            (time.perf_counter() - t0) * 1000
-        )
+            response["dish_recognition"] = {"error": "recognition_failed", "message": str(e)}
+        processing_times["recognition"] = int((time.perf_counter() - t0) * 1000)
 
-    # Task 2 — recipe generation (ingredients only)
+    # ── Task: recipe generation (only if ingredients provided) ──
     if ingredient_list:
         t0 = time.perf_counter()
         try:
-            response["generated_recipe"] = await ai_service.generate_recipe(
-                ingredient_list
-            )
+            response["generated_recipe"] = await ai_service.generate_recipe(ingredient_list)
         except Exception as e:
-            response["generated_recipe"] = {
-                "error": "generation_failed",
-                "message": str(e),
-            }
-        processing_times["generation"] = int(
-            (time.perf_counter() - t0) * 1000
-        )
+            response["generated_recipe"] = {"error": "generation_failed", "message": str(e)}
+        processing_times["generation"] = int((time.perf_counter() - t0) * 1000)
 
-    # Task 3 — nutritional analysis (ingredients only)
+    # ── Task: nutritional analysis (only if ingredients provided) ──
     if ingredient_list:
         t0 = time.perf_counter()
         try:
-            response["nutrition_per_serving"] = await ai_service.analyze_nutrition(
-                ingredient_list
-            )
+            response["nutrition_per_serving"] = await ai_service.analyze_nutrition(ingredient_list)
         except Exception as e:
-            response["nutrition_per_serving"] = {
-                "error": "nutrition_failed",
-                "message": str(e),
-            }
-        processing_times["nutrition"] = int(
-            (time.perf_counter() - t0) * 1000
-        )
+            response["nutrition_per_serving"] = {"error": "nutrition_failed", "message": str(e)}
+        processing_times["nutrition"] = int((time.perf_counter() - t0) * 1000)
 
-    # Task 4 — substitutions (ingredients only)
+    # ── Task: substitutions (only if ingredients provided) ──
     if ingredient_list:
         t0 = time.perf_counter()
         try:
             first_ingredient = ingredient_list[0]
             subs = await ai_service.get_substitutions(first_ingredient)
             response["suggested_substitutions"] = [
-                {
-                    "original": first_ingredient,
-                    "substitute": s["substitute"],
-                    "reason": s["effect"],
-                }
+                {"original": first_ingredient, "substitute": s["substitute"], "reason": s["effect"]}
                 for s in subs.get("substitutions", [])[:3]
             ]
         except Exception as e:
-            response["suggested_substitutions"] = {
-                "error": "substitution_failed",
-                "message": str(e),
-            }
-        processing_times["substitutions"] = int(
-            (time.perf_counter() - t0) * 1000
-        )
+            response["suggested_substitutions"] = {"error": "substitution_failed", "message": str(e)}
+        processing_times["substitutions"] = int((time.perf_counter() - t0) * 1000)
 
-    processing_times["total"] = int(
-        (time.perf_counter() - total_start) * 1000
-    )
+    processing_times["total"] = int((time.perf_counter() - total_start) * 1000)
     response["processing_time_ms"] = processing_times
+
     return response

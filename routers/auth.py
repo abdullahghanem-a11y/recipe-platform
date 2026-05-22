@@ -2,8 +2,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.core.database import get_db
-from app.core.security import hash_password, verify_password, create_access_token
+from app.core.security import (
+    hash_password, verify_password, create_access_token,
+    generate_api_key, hash_api_key, get_current_user,
+)
 from app.models.user import User
+from app.models.community import ApiKey
 from app.schemas.user import UserRegister, UserLogin, RegisterOut, TokenOut, UserOut
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -43,3 +47,24 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db)):
 
     token = create_access_token({"sub": user.id})
     return TokenOut(access_token=token)
+
+
+@router.post("/api-keys", status_code=201)
+async def create_api_key(
+    name: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    raw_key = generate_api_key()
+    key = ApiKey(
+        key_hash=hash_api_key(raw_key),
+        name=name,
+    )
+    db.add(key)
+    await db.flush()
+
+    return {
+        "key": raw_key,
+        "name": name,
+        "message": "Store this key securely — it will not be shown again.",
+    }
