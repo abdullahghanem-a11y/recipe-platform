@@ -1,14 +1,26 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from app.core.database import engine, Base
-from app.routers import auth, users, recipes, collections, ai
+from app.core.database import engine
+
+
+async def run_migrations():
+    """Run Alembic migrations on startup."""
+    import subprocess
+    result = subprocess.run(
+        ["python", "-m", "alembic", "upgrade", "head"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Alembic migration failed:\n{result.stderr}")
+    if result.stdout:
+        print(result.stdout)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    await run_migrations()
     yield
     await engine.dispose()
 
@@ -27,6 +39,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+from app.routers import auth, users, recipes, collections, ai  # noqa: E402
 
 app.include_router(auth.router)
 app.include_router(users.router)
