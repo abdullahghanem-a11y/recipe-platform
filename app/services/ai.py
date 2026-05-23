@@ -6,10 +6,12 @@ from PIL import Image
 import io
 from app.core.config import settings
 
+# ── lazy model holders ──────────────────────────────────────────────
 _vit_pipe = None
 _clip_model = None
 _clip_processor = None
 _nutrition_model = None
+
 
 def _load_vit():
     global _vit_pipe
@@ -30,6 +32,21 @@ def _load_clip():
         _clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
     return _clip_model, _clip_processor
 
+
+def _load_nutrition():
+    global _nutrition_model
+    if _nutrition_model is None:
+        from transformers import pipeline
+        _nutrition_model = pipeline(
+            "text-generation",
+            model="llmware-ai/slim-extract-tool",
+            max_new_tokens=200,
+        )
+    return _nutrition_model
+
+
+# ── dish recognition ─────────────────────────────────────────────────
+
 def recognize_dish(image_bytes: bytes) -> dict:
     pipe = _load_vit()
     image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
@@ -40,28 +57,25 @@ def recognize_dish(image_bytes: bytes) -> dict:
         "identified_dish": top["label"].replace("_", " ").lower(),
         "confidence": round(top["score"], 4),
         "top_3": [
-            {
-                "label": r["label"].replace("_", " ").lower(),
-                "score": round(r["score"], 4),
-            }
+            {"label": r["label"].replace("_", " ").lower(), "score": round(r["score"], 4)}
             for r in results
         ],
     }
 
 
 def image_is_food(image_bytes: bytes, threshold: float = 0.3) -> bool:
+    """Returns True if the image passes the food confidence gate."""
     pipe = _load_vit()
     image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     results = pipe(image, top_k=1)
     return results[0]["score"] >= threshold
 
-SYSTEM_PROMPT = """You are a recipe generation assistant. You must ONLY respond 
-with a valid JSON object. Do not include any explanation, preamble, or markdown 
-formatting like ```json.
-The JSON must follow this exact schema:
-{
+
+# ── recipe generation (hosted HF API) ────────────────────────────────
+
+RECIPE_SCHEMA = """{
   "title": "string",
-  "description": "string", 
+  "description": "string",
   "ingredients": [{"name": "string", "quantity": "string", "unit": "string"}],
   "steps": ["string"],
   "cuisine_type": "string",
@@ -70,204 +84,263 @@ The JSON must follow this exact schema:
   "servings": integer
 }"""
 
+SYSTEM_PROMPT = f"""You are a recipe generation assistant. You must ONLY respond with a valid JSON object. 
+Do not include any explanation, preamble, or markdown formatting like ```json.
+The JSON must follow this exact schema:
+{RECIPE_SCHEMA}
 
-async def generate_recipe(
-    ingredients: list[str],
-    dietary_preferences: list[str] = None,
-) -> dict:
+Example response for ingredients ["eggs", "cheese", "butter"]:
+{{"title":"Classic Cheese Omelette","description":"A quick and fluffy omelette.","ingredients":[{{"name":"eggs","quantity":"3","unit":"whole"}},{{"name":"cheese","quantity":"50","unit":"g"}},{{"name":"butter","quantity":"1","unit":"tbsp"}}],"steps":["Crack eggs into bowl and whisk","Melt butter in pan over medium heat","Pour in eggs, add cheese, fold and serve"],"cuisine_type":"French","prep_time_minutes":5,"cook_time_minutes":5,"servings":1}}"""
+
+
+def _extract_json(text: str) -> dict:
+    """
+    Robustly extract a JSON object from model output.
+    Handles markdown fences, preamble text, and trailing content.
+    """
+    text = text.strip()
+
+    # 1. Strip markdown fences: ```json ... ``` or ``` ... ```
+    if "```" in text:
+        parts = text.split("```")
+        for part in parts:
+            part = part.strip()
+            if part.startswith("json"):
+                part = part[4:].strip()
+            try:
+                return json.loads(part)
+            except Exception:
+                continue
+
+    # 2. Try parsing the whole text directly
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    # 3. Find the first { and last } and try that substring
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        try:
+            return json.loads(text[start:end + 1])
+        except Exception:
+            pass
+
+    raise ValueError(f"Could not extract valid JSON from model output: {text[:200]}")
+
+
+def _normalize_recipe(recipe: dict) -> dict:
+    """
+    Normalize the recipe dict to ensure ingredients are always objects.
+    Qwen sometimes returns ingredients as plain strings like '4 eggs'
+    instead of objects like {"name": "eggs", "quantity": "4", "unit": "whole"}.
+    """
+    ingredients = recipe.get("ingredients", [])
+    normalized = []
+    for item in ingredients:
+        if isinstance(item, str):
+            # Parse "4 tablespoons butter" into {name, quantity, unit}
+            parts = item.strip().split()
+            if len(parts) >= 3:
+                normalized.append({
+                    "name": " ".join(parts[2:]),
+                    "quantity": parts[0],
+                    "unit": parts[1],
+                })
+            elif len(parts) == 2:
+                normalized.append({
+                    "name": parts[1],
+                    "quantity": parts[0],
+                    "unit": "",
+                })
+            else:
+                normalized.append({
+                    "name": item,
+                    "quantity": "1",
+                    "unit": "",
+                })
+        elif isinstance(item, dict):
+            normalized.append({
+                "name": item.get("name", ""),
+                "quantity": str(item.get("quantity", "1")),
+                "unit": item.get("unit", ""),
+            })
+    recipe["ingredients"] = normalized
+
+    # Ensure steps is a list of strings
+    steps = recipe.get("steps", [])
+    recipe["steps"] = [s if isinstance(s, str) else str(s) for s in steps]
+
+    # Ensure numeric fields are ints
+    for field in ["prep_time_minutes", "cook_time_minutes", "servings"]:
+        try:
+            recipe[field] = int(recipe.get(field, 0))
+        except (ValueError, TypeError):
+            recipe[field] = 0
+
+    return recipe
+
+
+async def generate_recipe(ingredients: list[str], dietary_preferences: list[str] = None) -> dict:
+    import asyncio
+    from huggingface_hub import InferenceClient
+
     dietary_note = ""
     if dietary_preferences:
         dietary_note = f" The recipe must be suitable for: {', '.join(dietary_preferences)}."
 
-    user_message = (
-        f"Generate a recipe using these available ingredients: "
-        f"{', '.join(ingredients)}.{dietary_note}"
-    )
+    user_message = f"Generate a recipe using these available ingredients: {', '.join(ingredients)}.{dietary_note}"
 
-    prompt = f"<|system|>\n{SYSTEM_PROMPT}\n<|user|>\n{user_message}\n<|assistant|>\n"
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
-            "https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta",
-            headers={"Authorization": f"Bearer {settings.HUGGINGFACE_API_KEY}"},
-            json={
-                "inputs": prompt,
-                "parameters": {
-                    "max_new_tokens": 600,
-                    "temperature": 0.7,
-                    "return_full_text": False,
-                },
-            },
+    def _call():
+        client = InferenceClient(
+            model="Qwen/Qwen2.5-7B-Instruct",
+            token=settings.HUGGINGFACE_API_KEY,
+            timeout=60,
         )
+        response = client.chat_completion(
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_message},
+            ],
+            max_tokens=700,
+            temperature=0.7,
+        )
+        return response.choices[0].message.content
 
-    if response.status_code != 200:
-        raise RuntimeError(f"HF API error: {response.status_code}")
+    loop = asyncio.get_event_loop()
+    response = await loop.run_in_executor(None, _call)
+    recipe = _extract_json(response)
+    return _normalize_recipe(recipe)
 
-    raw = response.json()
-    generated_text = (
-        raw[0]["generated_text"] if isinstance(raw, list)
-        else raw.get("generated_text", "")
-    )
 
-    # Strip markdown fences if model adds them despite instructions
-    generated_text = generated_text.strip()
-    if generated_text.startswith("```"):
-        generated_text = generated_text.split("```")[1]
-        if generated_text.startswith("json"):
-            generated_text = generated_text[4:]
+# ── nutritional analysis ─────────────────────────────────────────────
 
-    return json.loads(generated_text.strip())
+async def analyze_nutrition(ingredients: list[str], servings: int = 1) -> dict:
+    import asyncio
+    from huggingface_hub import InferenceClient
 
-async def analyze_nutrition(
-    ingredients: list[str],
-    servings: int = 1,
-) -> dict:
     ingredient_text = "\n".join(f"- {i}" for i in ingredients)
-    prompt = f"""Estimate the total nutritional content for {servings} serving(s) 
-of a dish made with:
+    user_message = f"""Estimate the total nutritional content for {servings} serving(s) of a dish made with:
 {ingredient_text}
 
 Respond ONLY with a JSON object with these exact keys:
-{{"calories": number, "protein_g": number, "carbohydrates_g": number, 
-"fat_g": number, "fiber_g": number}}"""
+{{"calories": number, "protein_g": number, "carbohydrates_g": number, "fat_g": number, "fiber_g": number}}"""
 
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        response = await client.post(
-            "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1",
-            headers={"Authorization": f"Bearer {settings.HUGGINGFACE_API_KEY}"},
-            json={
-                "inputs": prompt,
-                "parameters": {
-                    "max_new_tokens": 150,
-                    "return_full_text": False,
-                },
-            },
+    def _call():
+        client = InferenceClient(
+            model="Qwen/Qwen2.5-7B-Instruct",
+            token=settings.HUGGINGFACE_API_KEY,
+            timeout=30,
         )
+        response = client.chat_completion(
+            messages=[
+                {"role": "system", "content": "You are a nutrition expert. Respond only with valid JSON, no explanation."},
+                {"role": "user", "content": user_message},
+            ],
+            max_tokens=150,
+            temperature=0.1,
+        )
+        return response.choices[0].message.content
 
-    if response.status_code != 200:
-        raise RuntimeError(f"HF API error: {response.status_code}")
-
-    raw = response.json()
-    text = raw[0]["generated_text"] if isinstance(raw, list) else raw.get("generated_text", "")
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-
-    nutrition = json.loads(text.strip())
+    loop = asyncio.get_event_loop()
+    response = await loop.run_in_executor(None, _call)
+    nutrition = _extract_json(response)
     nutrition["disclaimer"] = "Values are AI-estimated and not clinically verified."
     return nutrition
 
+
+# ── ingredient substitution ──────────────────────────────────────────
+
 SUBSTITUTE_CANDIDATES = [
-    "butter", "olive oil", "coconut oil", "vegetable oil",
+    "butter", "olive oil", "coconut oil", "vegetable oil", "applesauce",
     "milk", "oat milk", "almond milk", "soy milk", "coconut milk",
-    "eggs", "flax eggs", "aquafaba",
-    "all-purpose flour", "almond flour", "oat flour", "rice flour",
-    "sugar", "honey", "maple syrup", "agave",
+    "eggs", "flax eggs", "chia eggs", "aquafaba",
+    "all-purpose flour", "almond flour", "oat flour", "rice flour", "chickpea flour",
+    "sugar", "honey", "maple syrup", "agave", "stevia",
     "beef", "chicken", "tofu", "tempeh", "lentils", "jackfruit",
-    "cheese", "nutritional yeast", "cashew cheese",
+    "cheese", "nutritional yeast", "cashew cheese", "vegan cheese",
     "cream", "coconut cream", "silken tofu",
+    "breadcrumbs", "gluten-free breadcrumbs", "crushed crackers", "oats",
     "pancetta", "turkey bacon", "smoked tempeh", "mushroom bacon",
     "sour cream", "greek yogurt", "coconut yogurt",
+    "white wine", "apple juice", "white grape juice", "chicken broth",
     "soy sauce", "tamari", "coconut aminos",
     "mayonnaise", "avocado", "hummus",
 ]
 
 
-async def get_substitutions(
-    ingredient: str,
-    restriction: str = None,
-) -> dict:
-    import torch
-    model, processor = _load_clip()
+async def get_substitutions(ingredient: str, restriction: str = None) -> dict:
+    import asyncio
+    from huggingface_hub import InferenceClient
 
-    source_inputs = processor(
-        text=[ingredient], return_tensors="pt", padding=True
-    )
-    with torch.no_grad():
-        source_emb = model.get_text_features(**source_inputs)
-        source_emb = source_emb / source_emb.norm(dim=-1, keepdim=True)
+    restriction_note = f" for someone who is {restriction}" if restriction else ""
+    user_message = f"""Suggest 4 cooking substitutes for "{ingredient}"{restriction_note}.
+For each substitute, provide a similarity score between 0 and 1 (how similar it is as a substitute) and a 1-2 sentence explanation of how it affects taste and texture.
+Respond ONLY with this JSON structure:
+{{
+  "original_ingredient": "{ingredient}",
+  "restriction": "{restriction or ''}",
+  "substitutions": [
+    {{"substitute": "name", "similarity_score": 0.9, "effect": "explanation"}},
+    {{"substitute": "name", "similarity_score": 0.8, "effect": "explanation"}}
+  ]
+}}"""
 
-    cand_inputs = processor(
-        text=SUBSTITUTE_CANDIDATES, return_tensors="pt", padding=True
-    )
-    with torch.no_grad():
-        cand_embs = model.get_text_features(**cand_inputs)
-        cand_embs = cand_embs / cand_embs.norm(dim=-1, keepdim=True)
+    def _call():
+        client = InferenceClient(
+            model="Qwen/Qwen2.5-7B-Instruct",
+            token=settings.HUGGINGFACE_API_KEY,
+            timeout=30,
+        )
+        response = client.chat_completion(
+            messages=[
+                {"role": "system", "content": "You are a culinary expert. Respond only with valid JSON, no explanation or markdown."},
+                {"role": "user", "content": user_message},
+            ],
+            max_tokens=400,
+            temperature=0.3,
+        )
+        return response.choices[0].message.content
 
-    similarities = (source_emb @ cand_embs.T).squeeze(0).tolist()
-    scored = sorted(
-        zip(SUBSTITUTE_CANDIDATES, similarities),
-        key=lambda x: x[1],
-        reverse=True,
-    )
-
-    top = [
-        (s, score) for s, score in scored
-        if s.lower() != ingredient.lower()
-    ][:5]
-
-    explanations = await _explain_substitutions(
-        ingredient, [s for s, _ in top], restriction
-    )
-
-    return {
-        "original_ingredient": ingredient,
-        "restriction": restriction,
-        "substitutions": [
-            {
-                "substitute": sub,
-                "similarity_score": round(score, 3),
-                "effect": explanations.get(
-                    sub, "A suitable alternative for this ingredient."
-                ),
-            }
-            for sub, score in top
-        ],
-    }
+    loop = asyncio.get_event_loop()
+    response = await loop.run_in_executor(None, _call)
+    return _extract_json(response)
 
 
 async def _explain_substitutions(
-    original: str,
-    substitutes: list[str],
-    restriction: str = None,
+    original: str, substitutes: list[str], restriction: str = None
 ) -> dict:
-    restriction_note = (
-        f" (dietary restriction: {restriction})" if restriction else ""
-    )
+    import asyncio
+    from huggingface_hub import InferenceClient
+
+    restriction_note = f" (dietary restriction: {restriction})" if restriction else ""
     subs_list = ", ".join(substitutes)
 
-    prompt = f"""For cooking, briefly explain how each substitute affects taste 
-and texture when replacing "{original}"{restriction_note}.
+    user_message = f"""For cooking, briefly explain how each substitute affects taste and texture when replacing "{original}"{restriction_note}.
 Substitutes: {subs_list}
 Respond ONLY with a JSON object mapping each substitute name to a 1-2 sentence explanation.
 Example: {{"olive oil": "Lighter flavour. Works well in most savoury dishes."}}"""
 
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        response = await client.post(
-            "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1",
-            headers={"Authorization": f"Bearer {settings.HUGGINGFACE_API_KEY}"},
-            json={
-                "inputs": prompt,
-                "parameters": {
-                    "max_new_tokens": 300,
-                    "return_full_text": False,
-                },
-            },
+    def _call():
+        client = InferenceClient(
+            model="Qwen/Qwen2.5-7B-Instruct",
+            token=settings.HUGGINGFACE_API_KEY,
+            timeout=30,
         )
+        response = client.chat_completion(
+            messages=[
+                {"role": "system", "content": "You are a cooking expert. Respond only with valid JSON, no explanation."},
+                {"role": "user", "content": user_message},
+            ],
+            max_tokens=300,
+            temperature=0.3,
+        )
+        return response.choices[0].message.content
 
-    if response.status_code != 200:
-        return {}
-
-    raw = response.json()
-    text = raw[0]["generated_text"] if isinstance(raw, list) else raw.get("generated_text", "")
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
     try:
-        return json.loads(text.strip())
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, _call)
+        return _extract_json(response)
     except Exception:
         return {}

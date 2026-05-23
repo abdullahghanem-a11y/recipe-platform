@@ -4,6 +4,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import Optional
+from pydantic import BaseModel, field_validator
 from app.core.database import get_db
 from app.core.redis import make_cache_key, get_cached, set_cached, check_rate_limit
 from app.core.security import get_api_key
@@ -12,6 +13,41 @@ from app.models.recipe import Recipe
 from app.services import ai as ai_service
 
 router = APIRouter(prefix="/ai", tags=["ai"])
+
+
+# ── Request body schemas ──────────────────────────────────────────────
+
+class GenerateRequest(BaseModel):
+    ingredients: list[str]
+    dietary_preferences: list[str] = []
+
+    @field_validator("ingredients")
+    @classmethod
+    def validate_ingredients(cls, v):
+        if len(v) == 0:
+            raise ValueError("At least one ingredient required")
+        if len(v) > 20:
+            raise ValueError("Maximum 20 ingredients allowed")
+        return v
+
+
+class NutritionRequest(BaseModel):
+    ingredients: list[str]
+    servings: int = 1
+
+    @field_validator("ingredients")
+    @classmethod
+    def validate_ingredients(cls, v):
+        if len(v) == 0:
+            raise ValueError("At least one ingredient required")
+        if len(v) > 20:
+            raise ValueError("Maximum 20 ingredients allowed")
+        return v
+
+
+class SubstituteRequest(BaseModel):
+    ingredient: str
+    restriction: Optional[str] = None
 
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png"}
 
@@ -55,14 +91,12 @@ async def recognize(
     if len(image_bytes) > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Image must be under 10MB")
 
-    # Food gate check
     if not ai_service.image_is_food(image_bytes):
         raise HTTPException(
             status_code=422,
             detail={"error": "not_food", "message": "Image does not appear to contain food."},
         )
 
-    # Cache check
     cache_key = make_cache_key("recognize", {"hash": _image_hash(image_bytes)})
     cached = await get_cached(cache_key)
     if cached:
@@ -72,7 +106,6 @@ async def recognize(
     recognition = ai_service.recognize_dish(image_bytes)
     processing_ms = int((time.perf_counter() - t0) * 1000)
 
-    # Find matching recipes in DB
     dish_name = recognition["identified_dish"]
     result = await db.execute(
         select(Recipe).where(Recipe.title.ilike(f"%{dish_name.split()[0]}%")).limit(5)
@@ -91,25 +124,20 @@ async def recognize(
 
 @router.post("/generate")
 async def generate(
-    ingredients: list[str],
-    dietary_preferences: list[str] = None,
+    body: GenerateRequest,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_api_key),
 ):
     await check_rate_limit("/ai/generate", _.id)
-    if len(ingredients) > 20:
-        raise HTTPException(status_code=422, detail="Maximum 20 ingredients allowed")
-    if len(ingredients) == 0:
-        raise HTTPException(status_code=422, detail="At least one ingredient required")
 
-    cache_key = make_cache_key("generate", {"ingredients": sorted(ingredients)})
+    cache_key = make_cache_key("generate", {"ingredients": sorted(body.ingredients)})
     cached = await get_cached(cache_key)
     if cached:
         return cached
 
     t0 = time.perf_counter()
     try:
-        recipe = await ai_service.generate_recipe(ingredients, dietary_preferences)
+        recipe = await ai_service.generate_recipe(body.ingredients, body.dietary_preferences)
     except RuntimeError as e:
         raise HTTPException(
             status_code=503,
@@ -119,12 +147,12 @@ async def generate(
                 "retry_after_seconds": 30,
             },
         )
-    except Exception:
+    except Exception as e:
         raise HTTPException(
             status_code=503,
             detail={
                 "error": "generation_failed",
-                "message": "Could not parse a valid recipe from the model. Please try again.",
+                "message": f"Could not parse a valid recipe: {str(e)[:100]}",
                 "retry_after_seconds": 10,
             },
         )
@@ -139,23 +167,20 @@ async def generate(
 
 @router.post("/nutrition")
 async def nutrition(
-    ingredients: list[str],
-    servings: int = 1,
+    body: NutritionRequest,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_api_key),
 ):
     await check_rate_limit("/ai/nutrition", _.id)
-    if len(ingredients) > 20:
-        raise HTTPException(status_code=422, detail="Maximum 20 ingredients allowed")
 
-    cache_key = make_cache_key("nutrition", {"ingredients": sorted(ingredients), "servings": servings})
+    cache_key = make_cache_key("nutrition", {"ingredients": sorted(body.ingredients), "servings": body.servings})
     cached = await get_cached(cache_key)
     if cached:
         return cached
 
     t0 = time.perf_counter()
     try:
-        result = await ai_service.analyze_nutrition(ingredients, servings)
+        result = await ai_service.analyze_nutrition(body.ingredients, body.servings)
     except Exception:
         raise HTTPException(status_code=503, detail="Nutrition analysis temporarily unavailable")
 
@@ -169,20 +194,20 @@ async def nutrition(
 
 @router.post("/substitute")
 async def substitute(
-    ingredient: str,
-    restriction: Optional[str] = None,
+    body: SubstituteRequest,
     db: AsyncSession = Depends(get_db),
     _=Depends(get_api_key),
 ):
     await check_rate_limit("/ai/substitute", _.id)
-    cache_key = make_cache_key("substitute", {"ingredient": ingredient, "restriction": restriction})
+
+    cache_key = make_cache_key("substitute", {"ingredient": body.ingredient, "restriction": body.restriction})
     cached = await get_cached(cache_key)
     if cached:
         return cached
 
     t0 = time.perf_counter()
     try:
-        result = await ai_service.get_substitutions(ingredient, restriction)
+        result = await ai_service.get_substitutions(body.ingredient, body.restriction)
     except Exception:
         raise HTTPException(status_code=503, detail="Substitution service temporarily unavailable")
 

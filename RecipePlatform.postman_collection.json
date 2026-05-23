@@ -1,0 +1,689 @@
+{
+  "info": {
+    "name": "Recipe Platform API",
+    "description": "AI-Powered Recipe Sharing Platform \u2014 complete endpoint collection",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "api_key",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "recipe_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "collection_id",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/health",
+            "description": "Check if the API is running"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Register",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var json = pm.response.json();",
+                  "if (json.access_token) {",
+                  "  pm.collectionVariables.set('token', json.access_token);",
+                  "  console.log('Token saved automatically');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/auth/register",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"testuser\",\n  \"email\": \"test@example.com\",\n  \"password\": \"password123\",\n  \"dietary_preferences\": [\"vegan\"]\n}"
+            },
+            "description": "Register a new user. Token is saved automatically to the collection variable."
+          }
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var json = pm.response.json();",
+                  "if (json.access_token) {",
+                  "  pm.collectionVariables.set('token', json.access_token);",
+                  "  console.log('Token saved automatically');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/auth/login",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"test@example.com\",\n  \"password\": \"password123\"\n}"
+            },
+            "description": "Login and get a JWT token. Token is saved automatically."
+          }
+        },
+        {
+          "name": "Create API Key",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var json = pm.response.json();",
+                  "if (json.key) {",
+                  "  pm.collectionVariables.set('api_key', json.key);",
+                  "  console.log('API key saved automatically');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/auth/api-keys?name=test-key",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "api-keys"
+              ],
+              "query": [
+                {
+                  "key": "name",
+                  "value": "test-key"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "description": "Generate an API key for AI endpoints. Key is saved automatically."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "Get My Profile",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/users/me",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Update My Profile",
+          "request": {
+            "method": "PATCH",
+            "url": "{{base_url}}/users/me",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"updateduser\",\n  \"dietary_preferences\": [\"vegan\", \"gluten-free\"]\n}"
+            }
+          }
+        },
+        {
+          "name": "Get Saved Recipes",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/users/me/saved?page=1&limit=20",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "users",
+                "me",
+                "saved"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "collection_id",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Recipes",
+      "item": [
+        {
+          "name": "Create Recipe",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var json = pm.response.json();",
+                  "if (json.id) {",
+                  "  pm.collectionVariables.set('recipe_id', json.id);",
+                  "  console.log('Recipe ID saved: ' + json.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/recipes",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Simple Pasta\",\n  \"description\": \"A quick and easy pasta dish\",\n  \"ingredients\": [\n    { \"name\": \"pasta\", \"quantity\": \"200\", \"unit\": \"g\" },\n    { \"name\": \"olive oil\", \"quantity\": \"2\", \"unit\": \"tbsp\" },\n    { \"name\": \"garlic\", \"quantity\": \"2\", \"unit\": \"cloves\" }\n  ],\n  \"steps\": [\n    \"Boil salted water\",\n    \"Cook pasta until al dente\",\n    \"Heat olive oil in pan\",\n    \"Add garlic and cook 1 min\",\n    \"Drain pasta and toss with oil\"\n  ],\n  \"cuisine_type\": \"Italian\",\n  \"prep_time_minutes\": 5,\n  \"cook_time_minutes\": 12,\n  \"servings\": 2\n}"
+            },
+            "description": "Recipe ID is saved automatically for use in other requests."
+          }
+        },
+        {
+          "name": "List Recipes",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/recipes?page=1&limit=20&sort=newest",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "recipes"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "sort",
+                  "value": "newest"
+                },
+                {
+                  "key": "cuisine",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "ingredient",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "max_prep_time",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Recipe by ID",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/recipes/{{recipe_id}}"
+          }
+        },
+        {
+          "name": "Update Recipe",
+          "request": {
+            "method": "PATCH",
+            "url": "{{base_url}}/recipes/{{recipe_id}}",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Updated description\",\n  \"servings\": 4\n}"
+            }
+          }
+        },
+        {
+          "name": "Delete Recipe",
+          "request": {
+            "method": "DELETE",
+            "url": "{{base_url}}/recipes/{{recipe_id}}",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Rate Recipe",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/recipes/{{recipe_id}}/ratings",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"score\": 5\n}"
+            }
+          }
+        },
+        {
+          "name": "Save Recipe",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/recipes/{{recipe_id}}/save",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"collection_id\": null\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Collections",
+      "item": [
+        {
+          "name": "Create Collection",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var json = pm.response.json();",
+                  "if (json.id) {",
+                  "  pm.collectionVariables.set('collection_id', json.id);",
+                  "  console.log('Collection ID saved: ' + json.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/collections",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"My Favourites\"\n}"
+            }
+          }
+        },
+        {
+          "name": "List Collections",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/collections",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "AI Endpoints",
+      "item": [
+        {
+          "name": "Generate Recipe",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/ai/generate",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ingredients\": [\n    \"eggs\",\n    \"cheese\",\n    \"butter\",\n    \"herbs\"\n  ],\n  \"dietary_preferences\": []\n}"
+            },
+            "description": "Generate a structured recipe from a list of available ingredients. Uses Zephyr-7b via HF hosted API."
+          }
+        },
+        {
+          "name": "Nutritional Analysis",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/ai/nutrition",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ingredients\": [\n    \"200g pasta\",\n    \"2 tbsp olive oil\",\n    \"1 clove garlic\",\n    \"50g parmesan\"\n  ],\n  \"servings\": 2\n}"
+            },
+            "description": "Estimate nutritional breakdown for an ingredient list. Always includes a disclaimer field."
+          }
+        },
+        {
+          "name": "Ingredient Substitution",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/ai/substitute",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "Get substitution suggestions for an ingredient with an optional dietary restriction.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ingredient\": \"butter\",\n  \"restriction\": \"vegan\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Dish Recognition",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/ai/recognize",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "image",
+                  "type": "file",
+                  "src": "",
+                  "description": "Upload a food image (JPEG or PNG, max 10MB)"
+                }
+              ]
+            },
+            "description": "Identify a dish from a food photo. Returns top-3 predictions and matching recipes from the platform."
+          }
+        },
+        {
+          "name": "Smart Cooking Assistant",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/ai/assist",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "ingredients",
+                  "value": "[\"eggs\", \"cheese\", \"butter\"]",
+                  "type": "text",
+                  "description": "JSON array of ingredients as a string"
+                },
+                {
+                  "key": "image",
+                  "type": "file",
+                  "src": "",
+                  "disabled": true,
+                  "description": "Optional food photo"
+                }
+              ]
+            },
+            "description": "Unified endpoint. Send ingredients, a photo, or both. Returns recognition, generated recipe, nutrition, and substitutions based on what was provided."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Validation Tests",
+      "item": [
+        {
+          "name": "FAIL \u2014 Missing Auth",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/users/me",
+            "description": "Should return 403 \u2014 no token provided"
+          }
+        },
+        {
+          "name": "FAIL \u2014 Missing API Key",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/ai/nutrition",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "[\"pasta\"]"
+            },
+            "description": "Should return 401 \u2014 no X-API-Key header"
+          }
+        },
+        {
+          "name": "FAIL \u2014 Too Many Ingredients",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/ai/generate",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ingredients\": [\n    \"a\",\n    \"b\",\n    \"c\",\n    \"d\",\n    \"e\",\n    \"f\",\n    \"g\",\n    \"h\",\n    \"i\",\n    \"j\",\n    \"k\",\n    \"l\",\n    \"m\",\n    \"n\",\n    \"o\",\n    \"p\",\n    \"q\",\n    \"r\",\n    \"s\",\n    \"t\",\n    \"u\"\n  ]\n}"
+            },
+            "description": "Should return 422 \u2014 21 ingredients exceeds the 20 item limit"
+          }
+        },
+        {
+          "name": "FAIL \u2014 Empty Recipe Title",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/recipes",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"   \",\n  \"steps\": [\"Step 1\"]\n}"
+            },
+            "description": "Should return 422 \u2014 whitespace-only title is rejected"
+          }
+        },
+        {
+          "name": "FAIL \u2014 Invalid Rating Score",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/recipes/{{recipe_id}}/ratings",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"score\": 6\n}"
+            },
+            "description": "Should return 422 \u2014 score must be between 1 and 5"
+          }
+        }
+      ]
+    }
+  ]
+}
