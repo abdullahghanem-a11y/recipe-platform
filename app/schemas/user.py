@@ -34,22 +34,39 @@ class UserUpdate(BaseModel):
     dietary_preferences: Optional[list[str]] = None
 
 
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, v):
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters")
+        return v
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+
 class UserOut(BaseModel):
     id: str
     username: str
     email: str
     dietary_preferences: list[str]
     created_at: datetime
-
     model_config = {"from_attributes": True}
 
 
 class TokenOut(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
 
 
 class RegisterOut(BaseModel):
     user: UserOut
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"

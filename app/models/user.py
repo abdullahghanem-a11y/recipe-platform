@@ -17,6 +17,9 @@ class User(Base):
     dietary_preferences: Mapped[list[str]] = mapped_column(
         ARRAY(String), default=list, server_default="{}"
     )
+    refresh_token_hash: Mapped[str | None] = mapped_column(
+        String, nullable=True, default=None
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
