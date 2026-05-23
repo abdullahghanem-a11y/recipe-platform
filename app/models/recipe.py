@@ -28,4 +28,5 @@ class Recipe(Base):
 
     author = relationship("User", back_populates="recipes")
     ratings = relationship("Rating", back_populates="recipe", cascade="all, delete")
+    comments = relationship("Comment", back_populates="recipe", cascade="all, delete")
     saved_by = relationship("SavedRecipe", back_populates="recipe", cascade="all, delete")

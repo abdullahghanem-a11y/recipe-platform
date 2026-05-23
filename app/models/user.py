@@ -26,6 +26,7 @@ class User(Base):
 
     recipes = relationship("Recipe", back_populates="author", cascade="all, delete")
     ratings = relationship("Rating", back_populates="user", cascade="all, delete")
+    comments = relationship("Comment", back_populates="user", cascade="all, delete")
     saved_recipes = relationship("SavedRecipe", back_populates="user", cascade="all, delete")
     collections = relationship("Collection", back_populates="user", cascade="all, delete")
     inference_logs = relationship("InferenceLog", back_populates="user", cascade="all, delete")

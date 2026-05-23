@@ -72,7 +72,7 @@ class RecipeCreate(BaseModel):
     def validate_time(cls, v):
         if v < 0:
             raise ValueError("Time cannot be negative")
-        if v > 10080:  # 1 week in minutes
+        if v > 10080:
             raise ValueError("Time value is unrealistically large")
         return v
 
@@ -134,6 +134,7 @@ class RecipeOut(BaseModel):
     cook_time_minutes: int
     servings: int
     average_rating: Optional[float] = None
+    comment_count: int = 0
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -180,3 +181,52 @@ class CollectionOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# ── comment schemas ───────────────────────────────────────────────────
+
+class CommentCreate(BaseModel):
+    body: str
+
+    @field_validator("body")
+    @classmethod
+    def validate_body(cls, v):
+        v = v.strip()
+        if len(v) == 0:
+            raise ValueError("Comment cannot be empty")
+        if len(v) > 1000:
+            raise ValueError("Comment cannot exceed 1000 characters")
+        return v
+
+
+class CommentUpdate(BaseModel):
+    body: str
+
+    @field_validator("body")
+    @classmethod
+    def validate_body(cls, v):
+        v = v.strip()
+        if len(v) == 0:
+            raise ValueError("Comment cannot be empty")
+        if len(v) > 1000:
+            raise ValueError("Comment cannot exceed 1000 characters")
+        return v
+
+
+class CommentOut(BaseModel):
+    id: str
+    recipe_id: str
+    user_id: str
+    username: str
+    body: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class CommentListOut(BaseModel):
+    results: list[CommentOut]
+    total: int
+    page: int
+    limit: int
