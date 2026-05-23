@@ -4,19 +4,29 @@ from app.core.config import settings
 
 # ── dish recognition (hosted HF API) ─────────────────────────────────
 
-def recognize_dish(image_bytes: bytes) -> dict:
-    from huggingface_hub import InferenceClient
-    client = InferenceClient(token=settings.HUGGINGFACE_API_KEY)
-    results = client.image_classification(
-        image=image_bytes,
-        model="google/vit-base-patch16-224",
+def _call_image_classification(image_bytes: bytes) -> list:
+    import httpx
+    response = httpx.post(
+        "https://router.huggingface.co/hf-inference/models/google/vit-base-patch16-224",
+        headers={
+            "Authorization": f"Bearer {settings.HUGGINGFACE_API_KEY}",
+            "Content-Type": "image/jpeg",
+        },
+        content=image_bytes,
+        timeout=30,
     )
+    response.raise_for_status()
+    return response.json()
+
+
+def recognize_dish(image_bytes: bytes) -> dict:
+    results = _call_image_classification(image_bytes)
     top = results[0]
     return {
-        "identified_dish": top.label.replace("_", " ").lower(),
-        "confidence": round(top.score, 4),
+        "identified_dish": top["label"].replace("_", " ").lower(),
+        "confidence": round(top["score"], 4),
         "top_3": [
-            {"label": r.label.replace("_", " ").lower(), "score": round(r.score, 4)}
+            {"label": r["label"].replace("_", " ").lower(), "score": round(r["score"], 4)}
             for r in results[:3]
         ],
     }
@@ -24,13 +34,8 @@ def recognize_dish(image_bytes: bytes) -> dict:
 
 def image_is_food(image_bytes: bytes, threshold: float = 0.3) -> bool:
     """Returns True if the top prediction score meets the threshold."""
-    from huggingface_hub import InferenceClient
-    client = InferenceClient(token=settings.HUGGINGFACE_API_KEY)
-    results = client.image_classification(
-        image=image_bytes,
-        model="google/vit-base-patch16-224",
-    )
-    return results[0].score >= threshold
+    results = _call_image_classification(image_bytes)
+    return results[0]["score"] >= threshold
 
 
 # ── recipe generation ─────────────────────────────────────────────────
