@@ -1,12 +1,5 @@
 import json
-import io
-import base64
 from app.core.config import settings
-
-
-def _encode_image(image_bytes: bytes) -> str:
-    """Base64 encode image bytes for HF API."""
-    return base64.b64encode(image_bytes).decode("utf-8")
 
 
 # ── dish recognition (hosted HF API) ─────────────────────────────────
