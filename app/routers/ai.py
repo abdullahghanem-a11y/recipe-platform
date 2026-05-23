@@ -138,7 +138,7 @@ async def generate(
     t0 = time.perf_counter()
     try:
         recipe = await ai_service.generate_recipe(body.ingredients, body.dietary_preferences)
-    except RuntimeError as e:
+    except RuntimeError:
         raise HTTPException(
             status_code=503,
             detail={
@@ -147,12 +147,12 @@ async def generate(
                 "retry_after_seconds": 30,
             },
         )
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=503,
             detail={
                 "error": "generation_failed",
-                "message": f"Could not parse a valid recipe: {str(e)[:100]}",
+                "message": "Could not parse a valid recipe from the model. Please try again.",
                 "retry_after_seconds": 10,
             },
         )
