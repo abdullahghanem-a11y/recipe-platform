@@ -50,12 +50,42 @@ class RefreshTokenRequest(BaseModel):
     refresh_token: str
 
 
+# ── 2FA schemas ───────────────────────────────────────────────────────
+
+class TwoFactorVerify(BaseModel):
+    code: str
+
+    @field_validator("code")
+    @classmethod
+    def validate_code(cls, v):
+        v = v.strip()
+        if not v.isdigit() or len(v) != 6:
+            raise ValueError("Code must be exactly 6 digits")
+        return v
+
+
+class TwoFactorValidate(BaseModel):
+    temp_token: str
+    code: str
+
+    @field_validator("code")
+    @classmethod
+    def validate_code(cls, v):
+        v = v.strip()
+        if not v.isdigit() or len(v) != 6:
+            raise ValueError("Code must be exactly 6 digits")
+        return v
+
+
+# ── Output schemas ────────────────────────────────────────────────────
+
 class UserOut(BaseModel):
     id: str
     username: str
     email: str
     dietary_preferences: list[str]
     created_at: datetime
+    otp_enabled: bool = False
     model_config = {"from_attributes": True}
 
 
@@ -63,6 +93,7 @@ class TokenOut(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+    requires_2fa: bool = False
 
 
 class RegisterOut(BaseModel):

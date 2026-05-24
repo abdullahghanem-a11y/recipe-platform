@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, ARRAY
+from sqlalchemy import String, DateTime, ARRAY, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
@@ -22,6 +22,17 @@ class User(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    # ── 2FA fields ───────────────────────────────────────────────────
+    otp_secret: Mapped[str | None] = mapped_column(
+        String, nullable=True, default=None
+    )
+    otp_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    otp_verified: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
     )
 
     recipes = relationship("Recipe", back_populates="author", cascade="all, delete")

@@ -39,8 +39,34 @@ def create_refresh_token(data: dict) -> str:
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
+def create_temp_token(user_id: str) -> str:
+    """Short-lived token issued after password check when 2FA is required.
+    Has type='2fa_pending' so it cannot be used as a real access token."""
+    expire = datetime.now(timezone.utc) + timedelta(minutes=5)
+    return jwt.encode(
+        {"sub": user_id, "exp": expire, "type": "2fa_pending"},
+        settings.SECRET_KEY,
+        algorithm=settings.ALGORITHM,
+    )
+
+
+def decode_temp_token(token: str) -> str:
+    """Decode a 2fa_pending temp token and return user_id."""
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        if payload.get("type") != "2fa_pending":
+            raise HTTPException(status_code=401, detail="Invalid token type")
+        user_id = payload.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        return user_id
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="2FA session expired, please log in again")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
 def hash_token(token: str) -> str:
-    """SHA-256 hash a token for safe DB storage."""
     return hashlib.sha256(token.encode()).hexdigest()
 
 
@@ -69,7 +95,6 @@ async def get_current_user(
             settings.SECRET_KEY,
             algorithms=[settings.ALGORITHM],
         )
-        # Reject refresh tokens used as access tokens
         if payload.get("type") != "access":
             raise credentials_exception
 

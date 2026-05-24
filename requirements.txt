@@ -17,3 +17,5 @@ numpy==1.26.4
 python-dotenv==1.0.1
 huggingface-hub>=1.0.0
 ruff==0.4.4
+pyotp>=2.9.0
+qrcode[pil]>=7.4
