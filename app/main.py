@@ -2,10 +2,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from app.core.database import engine
+from sqlalchemy import text
 
 
 async def run_migrations():
-    """Run Alembic migrations on startup."""
+    """Run Alembic migrations + raw SQL column additions on startup."""
     import subprocess
     result = subprocess.run(
         ["python", "-m", "alembic", "upgrade", "head"],
@@ -16,6 +17,18 @@ async def run_migrations():
         raise RuntimeError(f"Alembic migration failed:\n{result.stderr}")
     if result.stdout:
         print(result.stdout)
+
+    # 2FA columns — safe to run every startup (IF NOT EXISTS)
+    async with engine.begin() as conn:
+        await conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_secret VARCHAR"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_enabled BOOLEAN DEFAULT false"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_verified BOOLEAN DEFAULT false"
+        ))
 
 
 @asynccontextmanager
